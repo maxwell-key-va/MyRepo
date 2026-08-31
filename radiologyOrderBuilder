@@ -1,0 +1,674 @@
+import ctypes
+import re
+import time
+import win32com.client
+import winsound
+import pandas as pd
+from pathlib import Path
+from pywinauto.keyboard import send_keys
+
+# =====================================================================
+# CONFIG
+# =====================================================================
+EXCEL_PATH   = Path(r"C:YourFilePath\Desktop\autoTest.xlsx")
+SHEET_NAME   = 0
+DRY_RUN      = False        # True = print steps only, no keystrokes sent
+TEST_MODE    = False         # True = use TEST prefix instead of RAZN
+TYPE_PAUSE   = 0.09       # per-key pause for send_keyEXTs
+PASTE_DELAY  = 1.2          # seconds after Ctrl+V
+SCREEN_POLL  = 0.3          # seconds between screen reads
+SCREEN_TIMEOUT = 20.0       # seconds to wait for expected prompt
+
+ORDER_PREFIX = "RAZN " 
+ORDER_SUFFIX = " 2026"
+
+
+# Required spreadsheet columns: ARTFIC
+#   order_name, imaging_type
+# order_name is used for both the DISPLAY TEXT and the Procedure prompt,
+# since these are always identical.
+# Example row: CT HEAD W/O CONT, CT SCAN
+REQUIRED_COLUMNS = ["order_name", "imaging_type"]
+
+# Valid IMAGING TYPE values, per the "Select one of the following imaging
+# types:" menu in VistA. Used for pre-flight validation only — the value
+# typed into VistA is still taken verbatim from the spreadsheet.
+VALID_IMAGING_TYPES = {
+    "ANGIO/NEURO/INTERVENTIONAL",
+    "CT SCAN",
+    "MAMMOGRAPHY",
+    "MAGNETIC RESONANCE IMAGING",
+    "NUCLEAR MEDICINE",
+    "GENERAL RADIOLOGY",
+    "ULTRASOUND",
+    "VASCULAR LAB",
+    "MRI",
+    "NUC"
+}
+
+# Clinical History is pasted from clipboard — set it once before running
+# the script (copy your fixed template text so it's on the clipboard).
+# This is what we used 
+# {FLD:IMAGING ICD10LINK}  
+# ========================================================== 
+# {FLD:621 IMAGING DX}
+# {FLD:621 IMAGING ICD10} {FLD:EDIT 50 REQ} 
+# ==========================================================
+
+
+{FLD:621 RAD PROVIDER NUMBER} {FLD:EDIT 25+}
+{FLD:621 STAT RAD ORDER}
+
+#
+# =====================================================================
+# SCREEN CONNECTION
+# =====================================================================
+def connect_screen():
+    extra   = win32com.client.GetActiveObject("EXTRA.System")
+    session = extra.ActiveSession
+    screen  = session.Screen
+    print(f"[SCREEN] Connected to: {extra.Sessions.Item(1).Name}")
+    return screen
+
+def get_screen_text(screen) -> str:
+    rows, cols = screen.Rows, screen.Cols
+    return "\n".join(screen.GetString(r, 1, cols) for r in range(1, rows + 1))
+
+def get_last_lines(screen, n=4) -> str:
+    rows, cols = screen.Rows, screen.Cols
+    return "\n".join(
+        screen.GetString(r, 1, cols) for r in range(rows - n + 1, rows + 1)
+    )
+
+def wait_for_any(screen, expected_list, timeout=SCREEN_TIMEOUT):
+    """
+    Wait until ANY string in expected_list appears on screen.
+    Returns (matched_string, screen_text) or (None, last_screen) on timeout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        text = get_screen_text(screen)
+        for exp in expected_list:
+            if exp.lower() in text.lower():
+                return exp, text
+        time.sleep(SCREEN_POLL)
+    return None, get_last_lines(screen, 4)
+
+# =====================================================================
+# PROCEDURE DISAMBIGUATION
+# =====================================================================
+# VistA matches typed procedure names on only the first 30 characters.
+# If a name is longer than that and shares its first-30-char prefix with
+# another procedure (e.g. "...CONTRAST LEFT" vs "...CONTRAST RIGHT"),
+# VistA shows a "CHOOSE 1-N:" numbered disambiguation list instead of
+# accepting the typed name directly. This parses that list and picks the
+# entry matching the full (untruncated) procedure name.
+def _parse_disambiguation_choices(screen_text: str) -> dict:
+    """
+    Parse numbered disambiguation options, e.g.:
+        1   CT LOWER EXTREMITY W/ CONTRAST LEFT
+        2   CT LOWER EXTREMITY W/ CONTRAST RIGHT
+    Returns {number: label}.
+    """
+    choices = {}
+    pattern = re.compile(r"^\s*(\d+)\s{2,}(.+?)\s*$", re.MULTILINE)
+    for m in pattern.finditer(screen_text):
+        num = int(m.group(1))
+        label = m.group(2).strip()
+        choices[num] = label
+    return choices
+
+def handle_procedure_disambiguation(screen, procedure_name: str) -> bool:
+    """
+    When a CHOOSE 1-N: prompt appears after typing the procedure name,
+    match the full procedure_name against the parsed choice labels and
+    select the correct number. Returns True if resolved, False if no
+    confident match was found (caller should hand off).
+    """
+    text = get_screen_text(screen)
+    choices = _parse_disambiguation_choices(text)
+
+    if not choices:
+        return False
+
+    target = procedure_name.strip().upper()
+    exact_matches = [num for num, label in choices.items() if label.strip().upper() == target]
+
+    if len(exact_matches) == 1:
+        chosen = exact_matches[0]
+        print(f"[DISAMBIGUATION] Matched '{procedure_name}' -> option {chosen}: '{choices[chosen]}'")
+        _type(str(chosen))
+        time.sleep(0.15)
+        screen_text = get_screen_text(screen)
+        if str(chosen) not in screen_text.splitlines()[-1] if screen_text.splitlines() else True:
+            print(f"[WARN] Disambiguation number '{chosen}' may not have typed correctly — "
+                  f"proceeding anyway, verify manually if the wrong order results.")
+        _send("{ENTER}")
+        return True
+
+    print(f"[DISAMBIGUATION] Could not find exact match for '{procedure_name}' "
+          f"among options: {choices}")
+    return False
+
+# =====================================================================
+# KEYSTROKE HELPERS
+# =====================================================================
+def _send(keys: str):
+    if not DRY_RUN:
+        send_keys(keys, pause=TYPE_PAUSE)
+
+def _type(text: str):
+    """Type literal text safely, preserving spaces and special send_keys characters."""
+    if DRY_RUN:
+        return
+    # pywinauto send_keys treats + ^ % ~ ( ) { } as special syntax.
+    # Escape them so they're typed literally instead of interpreted as
+    # modifier keys or key-group syntax.
+    SPECIAL_CHARS = set("+^%~(){}")
+    for char in text:
+        if char == " ":
+            send_keys("{SPACE}", pause=TYPE_PAUSE)
+        elif char in SPECIAL_CHARS:
+            send_keys("{" + char + "}", pause=TYPE_PAUSE)
+        else:
+            send_keys(char, pause=TYPE_PAUSE)
+
+# TEMP DEBUG: force the next call to _type_and_verify to report a fake
+# mismatch on its first attempt, so you can watch the retry path fire on
+# demand without waiting for a real stuck-key event. Set to True, run one
+# order, confirm the [TYPO DETECTED] banner and retry behave as expected,
+# then set back to False.
+DEBUG_FORCE_TYPO = False
+_debug_typo_already_forced = False
+
+def _type_and_verify(screen, text: str, prompt_marker: str = "", max_attempts: int = 2) -> bool:
+    """
+    Type text, read the terminal screen back, and retry if the typed value
+    does not appear exactly as expected. This catches repeated or dropped
+    keystrokes before the field is submitted.
+    """
+    global _debug_typo_already_forced
+
+    for attempt in range(1, max_attempts + 1):
+        _type(text)
+        time.sleep(0.15)
+        screen_text = get_screen_text(screen)
+        screen_lines = screen_text.upper().splitlines()
+        expected = text.upper()
+
+        # DEBUG: force a fake mismatch once, to test the failure path
+        force_fail = DEBUG_FORCE_TYPO and not _debug_typo_already_forced and attempt == 1
+        if force_fail:
+            _debug_typo_already_forced = True
+
+        if prompt_marker:
+            marker = prompt_marker.upper()
+            verified = any(
+                marker in line and "MODIFIER:" not in line and expected in line
+                for line in screen_lines
+            )
+        else:
+            verified = expected in screen_text.upper()
+
+        if force_fail:
+            verified = False
+
+        if verified:
+            if attempt > 1:
+                print(f"[RECOVERED] '{text}' verified correctly on attempt {attempt}.")
+            return True
+
+        # Loud, hard-to-miss failure signal — a silent [WARN] in a
+        # scrolling console is easy to miss if you're watching the VistA
+        # screen instead of the terminal at this exact moment.
+        winsound.MessageBeep(winsound.MB_ICONHAND)
+        print(f"\n{'!'*65}")
+        print(f"[TYPO DETECTED] Attempt {attempt}/{max_attempts} — mismatch typing '{text}'"
+              + ("  (DEBUG forced)" if force_fail else ""))
+        print(f"  Screen line(s) found instead:")
+        for line in screen_lines:
+            if line.strip() and (marker.lower() in line.lower() if prompt_marker else True):
+                print(f"    {line}")
+        print(f"{'!'*65}\n")
+
+        if attempt < max_attempts:
+            for _ in range(len(text) + 10):
+                _send("{BACKSPACE}")
+            time.sleep(0.2)
+
+    return False
+
+def _paste_clipboard():
+    """Send Ctrl+V using whatever is currently on the clipboard."""
+    _send("^v")
+    time.sleep(PASTE_DELAY)
+
+def _paste_and_wait_for_stable(screen, stable_checks: int = 3, poll_interval: float = 0.3,
+                                 max_wait: float = 15.0):
+    """
+    Send Ctrl+V, then poll the screen until its content stops changing
+    across `stable_checks` consecutive polls in a row — meaning the paste
+    has fully landed and rendering has caught up. This avoids both
+    premature NumLock+E (paste still streaming in) and guessing a fixed
+    delay that's wrong for varying paste sizes / connection speeds.
+    Returns True if stable, False if max_wait was exceeded.
+    """
+    _send("^v")
+    deadline = time.time() + max_wait
+    last_text = None
+    consecutive_same = 0
+
+    # Small initial pause to let the paste begin landing before first check
+    time.sleep(1.2)
+
+    while time.time() < deadline:
+        text = get_screen_text(screen)
+        if text == last_text:
+            consecutive_same += 1
+            if consecutive_same >= stable_checks:
+                return True
+        else:
+            consecutive_same = 0
+        last_text = text
+        time.sleep(poll_interval)
+
+    return False
+
+def _nume():
+    """Send NumLock followed by E to exit the VistA word processor editor."""
+    if DRY_RUN:
+        return
+    try:
+        _send("{NUMLOCK}E")
+    except Exception as exc:
+        print(f"[ERROR] Failed to send NumLock+E: {exc}")
+
+# =====================================================================
+# ESC PAUSE / HANDOFF
+# =====================================================================
+def _esc_pressed() -> bool:
+    return bool(ctypes.windll.user32.GetAsyncKeyState(0x1B) & 0x8000)
+
+def _wait_for_esc_resume(message="Press ESC again to resume."):
+    print(f"[PAUSED] {message}")
+    while _esc_pressed():
+        time.sleep(0.05)
+    while not _esc_pressed():
+        time.sleep(0.05)
+    while _esc_pressed():
+        time.sleep(0.05)
+    print("[RESUMED]")
+
+def handoff(reason: str, order_name: str, resume_hint: str = ""):
+    print(f"\n{'='*65}")
+    print(f"[HANDOFF] {reason}")
+    print(f"  Order : {ORDER_PREFIX}{order_name}{ORDER_SUFFIX}")
+    if resume_hint:
+        print(f"  Hint  : {resume_hint}")
+    print(f"  Fix the issue in VistA then press ESC to resume automation.")
+    print(f"{'='*65}\n")
+    winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+    _wait_for_esc_resume("Resolve in VistA, then press ESC to resume.")
+
+# =====================================================================
+# STEP TABLE — one fixed linear sequence per order
+# =====================================================================
+def build_steps(order: dict):
+    full_name    = ORDER_PREFIX + order["order_name"] + ORDER_SUFFIX
+    display_name = order["order_name"]
+    imaging_type = order["imaging_type"]
+    procedure    = order["order_name"]  # always identical to order_name
+
+    def step_order_name(screen):
+        ok = _type_and_verify(screen, full_name)
+        if not ok:
+            handoff(f"Order name may not have typed correctly — verification failed "
+                    f"for '{full_name}'.", order["order_name"],
+                    "Check the Select QUICK ORDER NAME: line before resuming.")
+        _send("{ENTER}")
+
+    def step_are_you_adding(screen):
+        ok = _type_and_verify(screen, "Y", prompt_marker="Are you adding")
+        if not ok:
+            handoff("'Y' may not have typed correctly at 'Are you adding' prompt.",
+                    order["order_name"],
+                    "Check the 'Are you adding' line before resuming.")
+        _send("{ENTER}")
+
+    def step_type_of_quick_order(screen):
+        ok = _type_and_verify(screen, "Imag", prompt_marker="TYPE OF QUICK ORDER:")
+        if not ok:
+            handoff("TYPE OF QUICK ORDER may not have typed correctly — verification "
+                    "failed for 'Imag'.", order["order_name"],
+                    "Check the TYPE OF QUICK ORDER: line before resuming.")
+        _send("{ENTER}")
+
+    def step_name_default(screen):
+        _send("{ENTER}")
+
+    def step_display_text(screen):
+        ok = _type_and_verify(screen, display_name, prompt_marker="DISPLAY TEXT:")
+        if not ok:
+            handoff(f"Display text may not have typed correctly — verification failed "
+                    f"for '{display_name}'.", order["order_name"],
+                    "Check the DISPLAY TEXT: line before resuming.")
+        _send("{ENTER}")
+
+    def step_verify_order(screen):
+        _send("{ENTER}")
+
+    def step_description_skip(screen):
+        _send("{ENTER}")  # stays NO// — editor never opens
+
+    def step_imaging_type(screen):
+        ok = _type_and_verify(screen, imaging_type, prompt_marker="IMAGING TYPE:")
+        if not ok:
+            handoff(f"Imaging type may not have typed correctly — verification failed "
+                    f"for '{imaging_type}'.", order["order_name"],
+                    "Check the Select IMAGING TYPE: line before resuming.")
+        _send("{ENTER}")
+
+    def step_procedure(screen):
+        for attempt in range(1, 3):
+            ok = _type_and_verify(screen, procedure, prompt_marker="Procedure:")
+            if not ok:
+                handoff(f"Procedure may not have typed correctly — verification failed "
+                        f"for '{procedure}'.", order["order_name"],
+                        "Check the procedure input line before resuming.")
+                return
+
+            _send("{ENTER}")
+
+            # VistA returns to the procedure prompt when the submitted text
+            # is corrupted or not accepted. Retry that field before handing
+            # control to the normal disambiguation/success flow.
+            # Note: not every imaging type shows "Procedure Modifier:" —
+            # e.g. Mammography goes straight to "Reason for Study:" when
+            # there's only one match. Treat either as acceptance.
+            #
+            # IMPORTANT: check "accepted"/"choose" BEFORE "retry", and only
+            # ever treat "retry" as true if the *last* non-blank line on
+            # screen is a bare procedure prompt — a stale "Radiology
+            # Procedure:" line can still be visible on screen even after
+            # VistA has already advanced to Procedure Modifier / Reason for
+            # Study, which previously caused a false "retry" match and sent
+            # a second copy of the procedure name into the wrong field.
+            time.sleep(0.3)  # let the screen finish advancing before the first read
+            deadline = time.time() + 8
+            result = None
+            while time.time() < deadline:
+                screen_text = get_screen_text(screen)
+                lower_text = screen_text.lower()
+                non_blank_lines = [l for l in lower_text.splitlines() if l.strip()]
+                last_line = non_blank_lines[-1] if non_blank_lines else ""
+
+                if "choose 1-" in lower_text:
+                    result = "choose"
+                    break
+                if "procedure modifier:" in lower_text or "reason for study:" in lower_text:
+                    result = "accepted"
+                    break
+                if "procedure:" in last_line and "modifier:" not in last_line:
+                    result = "retry"
+                    break
+                time.sleep(SCREEN_POLL)
+
+            if result == "accepted":
+                return
+            if result == "choose":
+                resolved = handle_procedure_disambiguation(screen, procedure)
+                if not resolved:
+                    handoff(f"Procedure disambiguation list appeared but no exact "
+                            f"match found for '{procedure}'.", order["order_name"],
+                            "Select the correct numbered option manually, then press ESC.")
+                return
+            if result != "retry":
+                handoff(f"VistA did not accept procedure '{procedure}'.",
+                        order["order_name"],
+                        "Check the procedure prompt and press ESC to resume.")
+                return
+
+            print(f"[WARN] VistA returned to the procedure prompt (attempt {attempt}/2). "
+                  "Retrying the procedure name.")
+
+        handoff(f"Procedure was not accepted after retries: '{procedure}'.",
+                order["order_name"],
+                "Correct the procedure manually and press ESC to resume.")
+
+    def step_procedure_modifier(screen):
+        # Only send Enter here if we're actually still sitting at the
+        # Procedure Modifier prompt. Some imaging types (e.g. Mammography)
+        # skip this prompt entirely when there's a single unambiguous
+        # match, going straight to Reason for Study — in that case there's
+        # nothing to do here.
+        text = get_screen_text(screen).lower()
+        if "procedure modifier:" in text:
+            _send("{ENTER}")
+
+    def step_reason_for_study(screen):
+        _send("{ENTER}")
+
+    def step_clin_hist_edit(screen):
+        ok = _type_and_verify(screen, "Y", prompt_marker="Edit? No//")
+        if not ok:
+            handoff("'Y' may not have typed correctly at Clinical History 'Edit? No//' prompt.",
+                    order["order_name"],
+                    "Check the Clinical History Edit line before resuming.")
+        _send("{ENTER}")
+
+    def step_clin_hist_paste(screen):
+        # Wait for the paste to fully land (screen content stops changing)
+        # rather than guessing a fixed delay — larger templates or slower
+        # rendering were causing NumLock+E to fire mid-paste, spilling the
+        # remainder into the next VistA prompt as literal keystrokes.
+        stable = _paste_and_wait_for_stable(screen)
+        if not stable:
+            print("[WARN] Paste did not appear to stabilize within max_wait — "
+                  "proceeding anyway, but verify the Clinical History content.")
+
+        text = get_screen_text(screen)
+        still_in_editor = "clinical history >" in text.lower()
+        if not still_in_editor:
+            handoff("Clinical History editor closed before NumLock+E was sent.",
+                    order["order_name"],
+                    "Check VistA screen state manually before resuming.")
+            return
+
+        _nume()
+
+    def step_enter_only(screen):
+        _send("{ENTER}")
+
+    return [
+        # (label, wait_for, timeout, action)
+        ("Order name",            ["Select QUICK ORDER NAME:"],           None, step_order_name),
+        ("Are you adding",        ["Are you adding"],                     None, step_are_you_adding),
+        ("Type of quick order",   ["TYPE OF QUICK ORDER:"],               None, step_type_of_quick_order),
+        ("Name (default)",        ["NAME:"],                              None, step_name_default),
+        ("Display text",          ["DISPLAY TEXT:"],                      None, step_display_text),
+        ("Verify order",          ["VERIFY ORDER:"],                      None, step_verify_order),
+        ("Description (skip)",    ["Edit? NO//"],                         None, step_description_skip),
+        ("Imaging type",          ["Select IMAGING TYPE:"],               None, step_imaging_type),
+        ("Procedure",             ["Procedure:"],                         None, step_procedure),
+        # SYNC POINT: prep/instruction text of variable length may appear
+        # between the procedure entry and this prompt. We ignore all of it
+        # and just wait for Procedure Modifier: to confirm acceptance.
+        # Some imaging types (e.g. Mammography) skip Procedure Modifier:
+        # entirely and go straight to Reason for Study: — accept either.
+        ("Procedure modifier",    ["Procedure Modifier:", "Reason for Study:"], 30, step_procedure_modifier),
+        ("Reason for study",      ["Reason for Study:"],                  None, step_reason_for_study),
+        ("Clinical history edit", ["Edit? No//"],                         None, step_clin_hist_edit),
+        ("Clinical history paste",["Clinical History >"],                 None, step_clin_hist_paste),
+        ("Category",              ["Category:"],                         25,   step_enter_only),
+        ("Pre-op",                ["Is this patient scheduled"],          None, step_enter_only),
+        ("Date desired",          ["Date Desired:"],                      None, step_enter_only),
+        ("Mode of transport",     ["Mode of Transport:"],                 None, step_enter_only),
+        ("Isolation",             ["Is patient on isolation"],            None, step_enter_only),
+        ("Urgency",               ["Urgency:"],                           None, step_enter_only),
+        ("Submit request to",     ["Submit request to:"],                 None, step_enter_only),
+        ("Place/Edit/Cancel",     ["(P)lace, (E)dit, or (C)ancel"],       None, step_enter_only),
+        ("Auto-accept",           ["Auto-accept this order?"],            None, step_enter_only),
+        ("Back to main prompt",   ["Select QUICK ORDER NAME:"],           None, None),  # completion check only
+    ]
+
+# =====================================================================
+# SINGLE ORDER ENTRY
+# =====================================================================
+def enter_order(screen, order: dict, order_num: int, total: int):
+    full_name = ORDER_PREFIX + order["order_name"] + ORDER_SUFFIX
+    print(f"\n[ORDER {order_num}/{total}] {full_name}  |  Type: {order['imaging_type']}")
+
+    if DRY_RUN:
+        print(f"  [DRY-RUN] Would enter order: {full_name}")
+        return True
+
+    steps = build_steps(order)
+
+    for label, wait_for, timeout, action in steps:
+        kwargs = {"timeout": timeout} if timeout else {}
+        matched, _ = wait_for_any(screen, wait_for, **kwargs)
+        if not matched:
+            handoff(f"Expected prompt not found: {label} ({wait_for})", order["order_name"])
+            # After manual fix + ESC, re-check once before giving up on this step
+            matched, _ = wait_for_any(screen, wait_for, **kwargs)
+            if not matched:
+                return False
+        if action:
+            action(screen)
+
+        if _esc_pressed():
+            _wait_for_esc_resume("Manual pause requested. Press ESC again to resume.")
+
+    print(f"[ORDER {order_num}/{total}] \u2713 Completed: {full_name}")
+    return True
+
+# =====================================================================
+# LOAD SPREADSHEET
+# =====================================================================
+if not EXCEL_PATH.exists():
+    raise FileNotFoundError(f"Excel not found: {EXCEL_PATH}")
+
+df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
+df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+if missing:
+    raise ValueError(f"Missing required column(s): {missing}. Found columns: {list(df.columns)}")
+
+if "include" in df.columns:
+    df = df[df["include"].astype(str).str.upper().isin(["Y", "YES", "1", "TRUE"])]
+
+orders = []
+for _, row in df.iterrows():
+    order = {
+        "order_name":   str(row.get("order_name", "")).strip(),
+        "imaging_type": str(row.get("imaging_type", "")).strip(),
+    }
+    if all(order.values()) and "nan" not in order.values():
+        orders.append(order)
+
+if not orders:
+    raise ValueError(f"No valid orders found. Check columns: {REQUIRED_COLUMNS}")
+
+# =====================================================================
+# PRE-FLIGHT VALIDATION
+# =====================================================================
+def validate_orders(orders: list) -> list:
+    """
+    Check each order for issues that would cause a mid-run handoff.
+    Returns a list of (row_num, order_name, issue) tuples. Does not
+    mutate orders — just reports.
+    """
+    problems = []
+    seen_full_names = {}
+
+    for i, o in enumerate(orders, 1):
+        name = o["order_name"]
+        imaging = o["imaging_type"]
+
+        # Imaging type must be one of the known VistA menu options
+        if imaging.upper() not in VALID_IMAGING_TYPES:
+            problems.append((i, name, f"Unrecognized imaging_type '{imaging}' "
+                              f"— must be one of: {', '.join(sorted(VALID_IMAGING_TYPES))}"))
+
+        # Order name length: confirmed via testing that VistA's QUICK ORDER
+        # NAME field has a hard 64-character limit (accepts 60, rejects 72).
+        # Flag anything at or over that so it fails pre-flight instead of
+        # hitting a "??" rejection mid-run.
+        full_name = ORDER_PREFIX + name + ORDER_SUFFIX
+        if len(full_name) >= 64:
+            problems.append((i, name, f"Full order name '{full_name}' is "
+                              f"{len(full_name)} chars — VistA's QUICK ORDER NAME "
+                              f"field limit is 64 chars, this will be rejected."))
+
+        # Duplicate full names would collide in VistA (second one hits
+        # "Are you adding... " differently, or edits the existing order).
+        if full_name in seen_full_names:
+            problems.append((i, name, f"Duplicate order name '{full_name}' "
+                              f"also used in row {seen_full_names[full_name]}."))
+        else:
+            seen_full_names[full_name] = i
+
+        # Catch stray leading/trailing whitespace or blank fields that
+        # slipped past the earlier filter (defensive, shouldn't normally fire)
+        for field_name, value in (("order_name", name), ("imaging_type", imaging)):
+            if value != value.strip():
+                problems.append((i, name, f"Field '{field_name}' has leading/trailing whitespace: '{value}'"))
+
+    return problems
+
+validation_problems = validate_orders(orders)
+if validation_problems:
+    print(f"\n{'='*65}")
+    print(f"PRE-FLIGHT VALIDATION FAILED — {len(validation_problems)} issue(s) found:")
+    for row_num, name, issue in validation_problems:
+        print(f"  Row {row_num:04d} [{name}]: {issue}")
+    print(f"{'='*65}")
+    raise ValueError("Fix the spreadsheet issues above, then re-run.")
+
+print(f"\n[PRE-FLIGHT] {len(orders)} order(s) passed validation.")
+
+# orders = orders[:1]  # TEMP: uncomment to test only the first order
+
+print(f"\n=== {len(orders)} orders loaded ===")
+for i, o in enumerate(orders, 1):
+    print(f"  {i:04d}. [{o['imaging_type']:<28}] {ORDER_PREFIX}{o['order_name']}{ORDER_SUFFIX}")
+
+print("\nMake sure your Clinical History template is on the clipboard before continuing.")
+
+# =====================================================================
+# CONNECT + RUN
+# =====================================================================
+screen = connect_screen()
+
+print(f"\nSwitch to your VistA terminal NOW.")
+print(f"Starting in 5 seconds... (Ctrl+C to abort)\n")
+time.sleep(5)
+
+failed = []
+
+for i, order in enumerate(orders, 1):
+    if _esc_pressed():
+        _wait_for_esc_resume("Manual pause. Press ESC again to resume.")
+    try:
+        ok = enter_order(screen, order, i, len(orders))
+        if not ok:
+            failed.append((i, order["order_name"], "step sequence broke"))
+    except KeyboardInterrupt:
+        print("\n[ABORTED] Ctrl+C pressed.")
+        break
+    except Exception as exc:
+        print(f"[ERROR] Order {i} '{order['order_name']}': {exc}")
+        failed.append((i, order["order_name"], str(exc)))
+        handoff(str(exc), order["order_name"], "Unexpected error — check VistA state.")
+
+# =====================================================================
+# SUMMARY
+# =====================================================================
+print(f"\n{'='*65}")
+print(f"COMPLETE — {len(orders)} orders processed.")
+if failed:
+    print(f"\nFailed orders ({len(failed)}):")
+    for num, name, reason in failed:
+        print(f"  {num:04d}. {name} — {reason}")
+print(f"{'='*65}")
