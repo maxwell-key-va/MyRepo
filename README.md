@@ -119,6 +119,9 @@ Each row is one order. `order_name` is used for both the display name and the pr
 
 Save as `.xlsx`.
 
+If you know Vista, less is more often times. This script hard codes these options as acceptable values, but in Vista, you can enter 'C' at the Imaging Type step, and it will give
+you 'CT SCAN'. For simplicity, I didn't hard code all the synonyms or abbreviations that you can technically use in Vista. 
+
 ### 6. Configure the script
 
 Open `radiologyOrderBuilder.py` in VS Code and edit the values in the `CONFIG` section near the top — see [Configuration Reference](#configuration-reference) below for what each setting does.
