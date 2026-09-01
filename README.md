@@ -19,6 +19,8 @@ This does **not** connect to VistA over the network, bypass any authentication, 
 
 ## How It Works
 
+**This script cannot create an order for a procedure that doesn't exist in VistA yet.** Radiology must add the procedure name into VistA (in whichever environment you're running against) before the script can select it — this is a hard prerequisite, not a timing nuance. Trying to run an order before radiology has added its procedure will result in VistA rejecting the procedure name outright, every time, regardless of how the script is configured.
+
 For each row in your spreadsheet, the script:
 
 1. Waits for VistA's `Select QUICK ORDER NAME:` prompt, then types a full order name built from a configurable prefix + your order name + a configurable suffix.
@@ -36,58 +38,67 @@ The script never assumes a fixed timing — every step waits for actual confirma
 
 ### Before You Start
 
-- A Windows computer with rights to install software
+- [Visual Studio Code](https://code.visualstudio.com/) with the Python extension installed, and the ability to create a Python virtual environment
 - Reflection Desktop Pro (or EXTRA!) installed and connected to your **test** VistA account
 - Microsoft Excel or similar, to build your order spreadsheet
+- **Confirmation from your radiology department that each procedure on your spreadsheet has already been added into VistA.** This script only automates the keystrokes of creating a quick order — it cannot create the underlying procedure itself. Any order attempted before radiology has added its procedure will fail, in test or production alike. Coordinate with radiology before building your spreadsheet so you're only including procedures that are actually ready.
 - About 20–30 minutes for first-time setup
 
 **Always test in your site's test account first.** Never run an unfamiliar or freshly modified version of this script against production.
+
+**Important — test account data may be out of date.** Your VistA test account is typically a snapshot/backup of production taken at some point in the past — it is **not** automatically kept in sync with new procedure names as radiology adds them to production. If radiology has added new procedure names to production *after* your test account's last backup/refresh, those procedure names will not exist in test yet, and the script will fail there — not because of a bug, but because VistA in test genuinely has no matching procedure to select. This can look identical to a real script problem (a rejected procedure name, an unexpected prompt) even though the script itself is working correctly.
+
+If you hit unexplained procedure rejection errors in test, check with radiology or your VistA team on whether the new procedure names actually exist in the test environment yet before assuming the script is broken.
+
+Because of this gap, testing may need to happen directly in **production** in practice. If so, set `ORDER_PREFIX` in the script to a clearly distinct, obviously-fake value (e.g. `"ZZTEST "`) instead of your real production prefix (e.g. `"RAZN "`). This keeps test orders created during development easy to identify and remove, and prevents them from being mistaken for real, intended quick orders. Only change `ORDER_PREFIX` to your real production value once you're confident the script is behaving correctly.
+
+**Note on Git:** If your site's IT permissions don't allow installing Git, that's fine — you don't need it. You can copy the script's code directly from this GitHub page instead of cloning the repo. Instructions below use that approach.
 
 ### 1. Install Python
 
 1. Go to [python.org/downloads](https://www.python.org/downloads/) and download the Windows installer.
 2. Run it. On the first screen, **check "Add python.exe to PATH"** before clicking Install. This step is easy to miss and breaks everything downstream if skipped.
 3. Click Install Now, then Close.
-4. Confirm it worked: open PowerShell (Windows key → type `powershell` → Enter) and run:
+4. Confirm it worked: open VS Code, open a new terminal (**Terminal → New Terminal** from the top menu), and run:
    ```
    python --version
    ```
    You should see something like `Python 3.12.x`.
 
-### 2. Install Git (only needed if cloning/updating from this repo)
+If your site doesn't allow installing new software at all (including Python), check with your local IT team first — this script cannot run without a working Python installation.
 
-1. Go to [git-scm.com/download/win](https://git-scm.com/download/win) and download/run the installer.
-2. Click through with default options.
-3. Close and reopen PowerShell, then confirm with:
+### 2. Get the script's code
+
+Since installing Git may not be an option:
+
+1. Go to this repository's page on GitHub.
+2. Click on `radiologyOrderBuilder.py` in the file list.
+3. Click the **"Raw"** button near the top of the file view — this shows the plain, unformatted code.
+4. Select all the text (Ctrl+A) and copy it (Ctrl+C).
+5. In VS Code, create a new file (**File → New Text File**), paste the code in, and save it as `radiologyOrderBuilder.py` in a project folder of your choice (e.g. `Desktop\RadOrderAutomation`).
+
+Repeat this same copy/paste process for any other files in the repo you want locally (this README, for reference).
+
+### 3. Create a virtual environment in VS Code
+
+1. In VS Code, open your project folder (**File → Open Folder**, select `RadOrderAutomation`).
+2. Open a terminal inside VS Code (**Terminal → New Terminal**).
+3. Create the virtual environment:
    ```
-   git --version
+   python -m venv .venv
    ```
+4. VS Code will likely pop up a notification asking if you want to use this new environment as your workspace's Python interpreter — click **Yes**. If it doesn't ask, you can select it manually: press `Ctrl+Shift+P`, type "Python: Select Interpreter," and choose the one showing `.venv`.
+5. Open a new terminal (close the old one and open a fresh one via **Terminal → New Terminal**) so it activates the environment automatically. You'll know it's active when you see `(.venv)` at the start of the terminal prompt.
 
-### 3. Get the project files
+### 4. Install required packages
 
-Clone this repo, or download and unzip it, into a folder such as `Desktop\RadOrderAutomation`.
-
-```
-git clone <this-repo-url>
-cd RadOrderAutomation
-```
-
-### 4. Create a virtual environment
-
-```
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-You'll know it's active when your prompt shows `(.venv)` at the start. You'll need to run the activate command again each time you open a new PowerShell window.
-
-### 5. Install required packages
+In the VS Code terminal, with `(.venv)` showing:
 
 ```
 pip install pywin32 pywinauto pyperclip pandas openpyxl
 ```
 
-### 6. Build your order spreadsheet
+### 5. Build your order spreadsheet
 
 Create an Excel file with exactly these two column headers in row 1:
 
@@ -107,17 +118,18 @@ Each row is one order. `order_name` is used for both the display name and the pr
 
 Save as `.xlsx`.
 
-### 7. Configure the script
+### 6. Configure the script
 
-Open `radOrderAutomate.py` and edit the values in the `CONFIG` section near the top — see [Configuration Reference](#configuration-reference) below for what each setting does.
+Open `radiologyOrderBuilder.py` in VS Code and edit the values in the `CONFIG` section near the top — see [Configuration Reference](#configuration-reference) below for what each setting does.
 
 ---
 
 ## Running the Script
 
-1. Open your terminal emulator and log into your **test** VistA account. Navigate to the `Select QUICK ORDER NAME:` prompt.
-2. Copy your Clinical History template text to your clipboard (Ctrl+C) — do this fresh before every run.
-3. In PowerShell, with `(.venv)` active:
+1. Open your terminal emulator and log into your **test** VistA account.
+2. Navigate through VistA's menus to the **Quick Order entry menu**, until you see the `Select QUICK ORDER NAME:` prompt on screen. The script assumes you're already sitting at this exact prompt when it starts — it does not navigate VistA's menus for you.
+3. Copy your Clinical History template text to your clipboard (Ctrl+C) — do this fresh before every run.
+4. In VS Code's terminal (with `(.venv)` showing at the start of the prompt):
    ```
    python radOrderAutomate.py
    ```
@@ -127,7 +139,8 @@ Open `radOrderAutomate.py` and edit the values in the `CONFIG` section near the 
 
 ### Testing checklist before a real run
 
-- [ ] `TEST_MODE = True` and you're in your **test** VistA account
+- [ ] `ORDER_PREFIX` is set to a clearly fake value (e.g. `"ZZTEST "`) — either in your test account, or in production if your test account's procedure data is out of date (see note above)
+- [ ] You're already sitting at the `Select QUICK ORDER NAME:` prompt in VistA before starting the script
 - [ ] Spreadsheet headers are exactly `order_name` and `imaging_type`
 - [ ] Clinical History template is on your clipboard
 - [ ] You've watched at least one order complete successfully end-to-end
@@ -143,17 +156,24 @@ All settings live in the `CONFIG` section at the top of `radOrderAutomate.py`.
 |---|---|
 | `EXCEL_PATH` | Full path to your order spreadsheet. |
 | `DRY_RUN` | `True` = print what would happen without sending real keystrokes. Good for a first check. |
-| `TEST_MODE` | `True` = use `TEST`-style prefix instead of production prefix. Always test with this on first. |
 | `TYPE_PAUSE` | Seconds between each simulated keystroke. `0.09` has proven reliable — going much lower risks corrupted keystrokes (see [Process Notes](#process-notes--lessons-learned)). |
 | `PASTE_DELAY` | Initial pause after pasting Clinical History, before polling for paste completion. |
-| `ORDER_PREFIX` / `ORDER_SUFFIX` | Your site's naming convention (e.g. `RAZN ... 2026`). |
+| `ORDER_PREFIX` / `ORDER_SUFFIX` | Your site's naming convention (e.g. `RAZN ... 2026`). **Set `ORDER_PREFIX` to an obviously-fake value (e.g. `"ZZTEST "`) while testing**, and only change it to your real production prefix once you trust the script's behavior. |
 | `VALID_IMAGING_TYPES` | The set of imaging types the pre-flight check will accept — matches VistA's actual menu options. |
 
 ---
 
 ## Troubleshooting
 
-**`ModuleNotFoundError` for any package** — A required package isn't installed in the active virtual environment. Re-run:
+**Script hangs for a long time right after starting, then hands off mentioning "Select QUICK ORDER NAME:"** — This almost always means VistA wasn't sitting at that exact prompt when the script started. Navigate to the Quick Order entry menu in VistA first, confirm `Select QUICK ORDER NAME:` is visible on screen, and re-run the script.
+
+**Procedure name gets rejected — check which cause first.** There are two different reasons this can happen, and the fix depends on which one it is:
+1. **Radiology hasn't added the procedure into VistA yet at all** (in any environment). This is a hard prerequisite — the script cannot work around it. Confirm with radiology whether the procedure has actually been added before assuming anything else is wrong.
+2. **The procedure exists in production but your test account is out of date** (see note above). In this case the procedure is genuinely ready to use, just not yet visible in test.
+
+Don't assume it's a script bug until both of these have been ruled out.
+
+**`ModuleNotFoundError` for any package** — A required package isn't installed in the active virtual environment. In VS Code's terminal, with `(.venv)` showing, re-run:
 ```
 pip install pywin32 pywinauto pyperclip pandas openpyxl
 ```
@@ -186,7 +206,7 @@ A shared spreadsheet was used to track progress between CACs and radiology staff
 - **Grey highlight** — "Tech Order Only," no order creation required.
 - **No highlight** — not yet completed by radiology.
 
-Once radiology marked a study "Activated in Rad Package" and "Radiology testing complete," CACs knew it was ready for quick order creation. Completed orders had their exact quick order name recorded for a clear audit trail.
+Once radiology marked a study "Activated in Rad Package" and "Radiology testing complete," CACs knew it was ready for quick order creation. These two markers matter because they represent the actual hard prerequisite for this entire process: **the script can only create a quick order for a procedure that already exists in VistA.** Attempting an order before radiology has added and activated its procedure will fail regardless of how the automation is configured — this isn't a script limitation to work around, it's a sequencing dependency that has to be respected. Completed orders had their exact quick order name recorded for a clear audit trail.
 
 ### First Approach: Macros
 
@@ -198,7 +218,7 @@ Built with `pywinauto` to simulate keystrokes and `win32com` to read the termina
 
 **Unpredictable VistA output.** Early versions assumed a fixed prompt sequence, which broke down quickly given VistA's variable output (prep text, category warnings, disambiguation prompts). The fix: wait for explicit screen confirmation before every typed action, rather than assuming fixed timing.
 
-**Naming convention.** A `2026` suffix was added to every new order both to differentiate them from older orders and guarantee uniqueness. A swappable test prefix (`ZZTEST` or similar) made test-run orders easy to distinguish from production-track builds.
+**Naming convention.** A `2026` suffix was added to every new order both to differentiate them from older orders and guarantee uniqueness. The prefix and suffix together are what make each order name unique — this matters because VistA requires each quick order dialog name to be distinct, and attempting to "create" a name that already exists means editing that existing order instead of creating a new one. We kept our normal production prefix (`RAZN`) rather than inventing a new one, and paired it with a suffix (`2026`) that hadn't been used before, so that no existing order name could collide with a newly created one. This is a naming-convention safeguard, separate from (and in addition to) the script's own pre-flight duplicate check described below — even if a naming collision were to happen despite the convention, the script's validation step would catch and stop it before the run ever starts, rather than silently overwriting an existing order. A swappable test prefix (`ZZTEST` or similar) made test-run orders easy to distinguish from production-track builds.
 
 **Order name length limit.** An initial assumption of a 30-character limit was wrong. Empirical testing (typing progressively longer strings until VistA rejected one) found the real limit to be 64 characters, which is now enforced as a pre-flight check.
 
