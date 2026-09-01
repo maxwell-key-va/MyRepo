@@ -5,7 +5,7 @@ A Python script that automates the creation of radiology "quick orders" in VistA
 This does **not** connect to VistA over the network, bypass any authentication, or modify VistA itself. It automates the same manual keystrokes a person would type into an already-logged-in terminal session, driven from a simple two-column spreadsheet.
 
 ---
-<img width="1914" height="1014" alt="image" src="https://github.com/user-attachments/assets/41ef29cd-a1ff-4d33-8de5-ef88ac10f969" />
+
 
 ## Table of Contents
 
