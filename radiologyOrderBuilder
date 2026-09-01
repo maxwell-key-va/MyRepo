@@ -13,7 +13,7 @@ from pywinauto.keyboard import send_keys
 EXCEL_PATH   = Path(r"C:YourFilePath\Desktop\autoTest.xlsx")
 SHEET_NAME   = 0
 DRY_RUN      = False        # True = print steps only, no keystrokes sent
-TEST_MODE    = False         # True = use TEST prefix instead of RAZN
+
 TYPE_PAUSE   = 0.09       # per-key pause for send_keyEXTs
 PASTE_DELAY  = 1.2          # seconds after Ctrl+V
 SCREEN_POLL  = 0.3          # seconds between screen reads
