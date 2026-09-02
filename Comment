@@ -1,0 +1,18 @@
+This version contains an additional check to make sure your clipboard has the correct content copied prior to runnings. 
+
+Change this section of code to the fields you will be using for your orders
+
+
+# Clinical History is pasted from clipboard — set it once before running
+# the script (copy your fixed template text so it's on the clipboard).
+#
+# These fragments are checked against the clipboard before a run starts,
+# to catch the "forgot to copy the template" mistake before it silently
+# pastes wrong/empty content into every order in the batch. Update this
+# list to match distinctive pieces of your actual template.
+CLINICAL_HISTORY_EXPECTED_FRAGMENTS = [
+    "{FLD:IMAGING ICD10LINK}",
+    "{FLD:621 IMAGING DX}",
+    "{FLD:621 RAD PROVIDER NUMBER}",
+    "{FLD:621 STAT RAD ORDER}",
+]
