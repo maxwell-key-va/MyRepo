@@ -4,26 +4,31 @@ import time
 import win32com.client
 import winsound
 import pandas as pd
+import pyperclip
 from pathlib import Path
 from pywinauto.keyboard import send_keys
 
 # =====================================================================
 # CONFIG
 # =====================================================================
-EXCEL_PATH   = Path(r"C:YourFilePath\Desktop\autoTest.xlsx")
+# File: radiologyOrderBuilder.py
+EXCEL_PATH   = Path(r"C:\Users\YOURFILEPATH\Desktop\YOURSPREADSHEET.xlsx")
 SHEET_NAME   = 0
 DRY_RUN      = False        # True = print steps only, no keystrokes sent
-
 TYPE_PAUSE   = 0.09       # per-key pause for send_keyEXTs
 PASTE_DELAY  = 1.2          # seconds after Ctrl+V
 SCREEN_POLL  = 0.3          # seconds between screen reads
 SCREEN_TIMEOUT = 20.0       # seconds to wait for expected prompt
 
-ORDER_PREFIX = "RAZN " 
-ORDER_SUFFIX = " 2026"
+# Set ORDER_PREFIX to an obviously-fake value (e.g. "ZZTEST ") while
+# testing, so test orders are easy to identify and remove. Only switch
+# this to your site's real production prefix (e.g. "RAZN ") once you're
+# confident the script is behaving correctly.
+ORDER_PREFIX = "ZZXYZ " 
+ORDER_SUFFIX = " 1999"
 
 
-# Required spreadsheet columns: ARTFIC
+# Required spreadsheet columns:
 #   order_name, imaging_type
 # order_name is used for both the DISPLAY TEXT and the Procedure prompt,
 # since these are always identical.
@@ -48,7 +53,7 @@ VALID_IMAGING_TYPES = {
 
 # Clinical History is pasted from clipboard — set it once before running
 # the script (copy your fixed template text so it's on the clipboard).
-# This is what we used 
+# This is what we used (minus the #'s for comments in IDE) 
 # {FLD:IMAGING ICD10LINK}  
 # ========================================================== 
 # {FLD:621 IMAGING DX}
@@ -59,7 +64,18 @@ VALID_IMAGING_TYPES = {
 #{FLD:621 RAD PROVIDER NUMBER} {FLD:EDIT 25+}
 #{FLD:621 STAT RAD ORDER}
 #
-#
+
+# These fragments are checked against the clipboard before a run starts,
+# to catch the "forgot to copy the template" mistake before it silently
+# pastes wrong/empty content into every order in the batch. Update this
+# list to match distinctive pieces of your actual template.
+CLINICAL_HISTORY_EXPECTED_FRAGMENTS = [
+    "{FLD:IMAGING ICD10LINK}",
+    "{FLD:621 IMAGING DX}",
+    "{FLD:621 RAD PROVIDER NUMBER}",
+    "{FLD:621 STAT RAD ORDER}",
+]
+
 # =====================================================================
 # SCREEN CONNECTION
 # =====================================================================
@@ -627,6 +643,43 @@ if validation_problems:
     raise ValueError("Fix the spreadsheet issues above, then re-run.")
 
 print(f"\n[PRE-FLIGHT] {len(orders)} order(s) passed validation.")
+
+# =====================================================================
+# CLIPBOARD PRE-FLIGHT CHECK
+# =====================================================================
+# Confirms the Clinical History template is actually on the clipboard
+# before the run starts — catches the "forgot to copy it" mistake before
+# it silently pastes wrong/empty content into every order in the batch.
+def verify_clipboard_template(expected_fragments: list) -> list:
+    """
+    Returns a list of expected fragments NOT found in the current
+    clipboard content. Empty list means the clipboard looks correct.
+    """
+    try:
+        clip = pyperclip.paste()
+    except Exception as exc:
+        print(f"[ERROR] Could not read clipboard: {exc}")
+        return list(expected_fragments)  # treat as fully missing
+
+    return [frag for frag in expected_fragments if frag not in clip]
+
+missing_fragments = verify_clipboard_template(CLINICAL_HISTORY_EXPECTED_FRAGMENTS)
+if missing_fragments:
+    print(f"\n{'='*65}")
+    print(f"CLIPBOARD CHECK FAILED — Clinical History template not found on clipboard.")
+    print(f"Missing {len(missing_fragments)}/{len(CLINICAL_HISTORY_EXPECTED_FRAGMENTS)} "
+          f"expected fragment(s):")
+    for frag in missing_fragments:
+        print(f"  - {frag}")
+    print(f"\nCurrent clipboard content:")
+    try:
+        print(f"  {pyperclip.paste()!r}")
+    except Exception:
+        print("  (could not read)")
+    print(f"{'='*65}")
+    raise ValueError("Copy your Clinical History template to the clipboard, then re-run.")
+
+print(f"[PRE-FLIGHT] Clipboard contains expected Clinical History template.")
 
 # orders = orders[:1]  # TEMP: uncomment to test only the first order
 
