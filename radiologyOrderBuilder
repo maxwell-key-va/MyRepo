@@ -54,11 +54,11 @@ VALID_IMAGING_TYPES = {
 # {FLD:621 IMAGING DX}
 # {FLD:621 IMAGING ICD10} {FLD:EDIT 50 REQ} 
 # ==========================================================
-
-
+#
+#
 #{FLD:621 RAD PROVIDER NUMBER} {FLD:EDIT 25+}
 #{FLD:621 STAT RAD ORDER}
-
+#
 #
 # =====================================================================
 # SCREEN CONNECTION
