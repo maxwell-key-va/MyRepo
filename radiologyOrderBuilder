@@ -56,8 +56,8 @@ VALID_IMAGING_TYPES = {
 # ==========================================================
 
 
-{FLD:621 RAD PROVIDER NUMBER} {FLD:EDIT 25+}
-{FLD:621 STAT RAD ORDER}
+#{FLD:621 RAD PROVIDER NUMBER} {FLD:EDIT 25+}
+#{FLD:621 STAT RAD ORDER}
 
 #
 # =====================================================================
