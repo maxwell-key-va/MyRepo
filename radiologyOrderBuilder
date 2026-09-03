@@ -23,7 +23,7 @@ ORDER_PREFIX = "RAZN "
 ORDER_SUFFIX = " 2026"
 
 
-# Required spreadsheet columns: ARTFIC
+# Required spreadsheet columns: 
 #   order_name, imaging_type
 # order_name is used for both the DISPLAY TEXT and the Procedure prompt,
 # since these are always identical.
