@@ -1,0 +1,81 @@
+# Python Virtual Environment Setup
+
+This guide explains how to create and use the project virtual environment in this folder.
+
+## Prerequisite
+
+Install Python 3.10 or later. On Windows, the `py` launcher can work even when the `python` command is not configured on `PATH`. Confirm that the launcher is available:
+
+```powershell
+py --version
+```
+
+If `py --version` shows a Python version, continue with the commands below. You do not need to fix the global `python` command first; once the environment is activated, `python` points to the environment's interpreter.
+
+## Create the environment
+
+Open PowerShell in this folder and run:
+
+```powershell
+py -m venv .venv
+```
+
+This creates a `.venv` folder containing an isolated Python installation for this workspace.
+
+## Activate the environment
+
+Run:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+When activation succeeds, `(.venv)` appears at the beginning of the PowerShell prompt.
+
+## Verify it
+
+```powershell
+python --version
+where.exe python
+```
+
+The Python path should point to this folder's `.venv\Scripts\python.exe`.
+
+## Install packages
+
+With the environment active, install packages as needed:
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install package-name
+```
+
+Replace `package-name` with the package your script requires.
+
+## Select it in VS Code
+
+1. Open the Command Palette with `Ctrl+Shift+P`.
+2. Run **Python: Select Interpreter**.
+3. Choose the interpreter under `.venv\Scripts\python.exe`.
+
+## Deactivate the environment
+
+When finished, run:
+
+```powershell
+deactivate
+```
+
+## Troubleshooting
+
+### Neither `py` nor `python` is available
+
+Install Python from [python.org](https://www.python.org/downloads/) and select **Add python.exe to PATH** during installation. Open a new PowerShell window afterward and run `py --version` again.
+
+If PowerShell blocks activation with an execution-policy message, allow locally created scripts for your user account:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+Then run the activation command again. You only need to do this once per Windows user account.
