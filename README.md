@@ -1,6 +1,6 @@
 # VistA Radiology Quick Order Automation
 
-A Python script that automates the creation of radiology "quick orders" in VistA, using screen-reading and simulated keystrokes against an already-open Reflection Desktop Pro / EXTRA! terminal session. Built to support bulk quick order creation as part of a HICOP requiring a large number of new imaging orders across multiple new menus.
+A Python script that automates the creation of radiology quick orders in VistA, using screen-reading and simulated keystrokes against an already-open Reflection Desktop Pro / EXTRA! terminal session. Built to support bulk quick order creation as part of a HICOP requiring a large number of new imaging orders across multiple new menus.
 
 This does **not** connect to VistA over the network, bypass any authentication, or modify VistA itself. It automates the same manual keystrokes a person would type into an already-logged-in terminal session, driven from a simple two-column spreadsheet.
 
@@ -20,16 +20,16 @@ This does **not** connect to VistA over the network, bypass any authentication, 
 
 ## How It Works
 
-**This script cannot create an order for a procedure that doesn't exist in VistA yet.** Radiology must add the procedure name into VistA (in whichever environment you're running against) before the script can select it — this is a hard prerequisite, not a timing nuance. Trying to run an order before radiology has added its procedure will result in VistA rejecting the procedure name outright, every time, regardless of how the script is configured.
+**This script cannot create an order for a procedure that doesn't exist in VistA yet.** Radiology must add the procedure name into VistA before the script can select it — this is a hard prerequisite, not a timing nuance. Trying to run an order before radiology has added its procedure will result in VistA rejecting the procedure name outright, every time, regardless of how the script is configured.
 
 For each row in your spreadsheet, the script:
 
-1. Waits for VistA's `Select QUICK ORDER NAME:` prompt, then types a full order name built from a configurable prefix + your order name + a configurable suffix.
+1. Waits for VistA's `Select QUICK ORDER NAME:` prompt, then types a full order name built from a configurable prefix + order name + a configurable suffix.
 2. Walks through the full quick order creation sequence — confirming the new order, selecting "Imaging" as the order type, entering the display text, selecting the imaging type, and entering the procedure name — waiting for each specific VistA prompt to appear before typing anything.
-3. Leaves fields like Verify Order, Description, Procedure Modifier, and Reason for Study blank, matching local convention.
+3. Leaves fields like Verify Order, Description, Procedure Modifier, and Reason for Study blank.
 4. Pastes a fixed Clinical History template from the clipboard (you copy this once before running).
 5. Leaves all remaining fields (Category, Pre-op, Date Desired, Mode of Transport, Isolation, Urgency, Submit To, Place/Auto-accept) at their defaults.
-6. Confirms the order was placed and moves to the next row.
+6. Confirms the order was created and moves to the next row.
 
 The script never assumes a fixed timing — every step waits for actual confirmation from the VistA screen before proceeding, and every typed field is read back and verified to make sure it landed correctly. If anything doesn't match what's expected, the script pauses, beeps, and hands control back to you so you can resolve it manually in VistA, then resume by pressing **ESC**.
 
@@ -45,9 +45,9 @@ The script never assumes a fixed timing — every step waits for actual confirma
 - **Confirmation from your radiology department that each procedure on your spreadsheet has already been added into VistA.** This script only automates the keystrokes of creating a quick order — it cannot create the underlying procedure itself. Any order attempted before radiology has added its procedure will fail, in test or production alike. Coordinate with radiology before building your spreadsheet so you're only including procedures that are actually ready.
 - About 20–30 minutes for first-time setup
 
-**Always test in your site's test account first.** Never run an unfamiliar or freshly modified version of this script against production.
+**Always test in your site's test account first.** Never run an unfamiliar or freshly modified version of this script against production. If you can find some orders that have the procedures already activated, that would be the ideal place to start in test account
 
-**Important — test account data may be out of date.** Your VistA test account is typically a snapshot/backup of production taken at some point in the past — it is **not** automatically kept in sync with new procedure names as radiology adds them to production. If radiology has added new procedure names to production *after* your test account's last backup/refresh, those procedure names will not exist in test yet, and the script will fail there — not because of a bug, but because VistA in test genuinely has no matching procedure to select. This can look identical to a real script problem (a rejected procedure name, an unexpected prompt) even though the script itself is working correctly.
+**Important — test account data may be out of date.** Your VistA test account is a snapshot/backup of production taken at some point in the past — it is **not** automatically kept in sync with new procedure names as radiology adds them to production. If radiology has added new procedure names to production *after* your test account's last backup/refresh, those procedure names will not exist in test yet, and the script will fail there — not because of a bug, but because VistA in test genuinely has no matching procedure to select. This can look identical to a real script problem (a rejected procedure name, an unexpected prompt) even though the script itself is working correctly.
 
 If you hit unexplained procedure rejection errors in test, check with radiology or your VistA team on whether the new procedure names actually exist in the test environment yet before assuming the script is broken.
 
@@ -137,6 +137,7 @@ Open `radiologyOrderBuilder.py` in VS Code and edit the values in the `CONFIG` s
    ```
    python radOrderAutomate.py
    ```
+   Or click the Run Python File in Dedicated Terminal button at the top right of the file in VS Code
 4. The script validates your spreadsheet first and will stop with a clear error list if anything's wrong before it ever touches VistA.
 5. You'll get a 5-second countdown to switch focus to your VistA terminal window before typing begins.
 6. Watch the first order closely. If a `[HANDOFF]` message appears (with a beep), read it, fix the issue manually in VistA, then press **ESC** to resume.
