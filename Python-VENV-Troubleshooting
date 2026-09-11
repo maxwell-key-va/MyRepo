@@ -50,7 +50,7 @@ python -m pip install --upgrade pip
 python -m pip install package-name
 ```
 
-Replace `package-name` with the package your script requires.
+Replace `package-name` with the imported libraries at the top of the script.
 
 ## Select it in VS Code
 
@@ -72,10 +72,3 @@ deactivate
 
 Install Python from [python.org](https://www.python.org/downloads/) and select **Add python.exe to PATH** during installation. Open a new PowerShell window afterward and run `py --version` again.
 
-If PowerShell blocks activation with an execution-policy message, allow locally created scripts for your user account:
-
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-Then run the activation command again. You only need to do this once per Windows user account.
