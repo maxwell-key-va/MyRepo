@@ -64,7 +64,7 @@ Because of this gap, testing may need to happen directly in **production** in pr
    ```
    python --version
    ```
-   You should see something like `Python 3.12.x`.
+   You should see something like `Python 3.14.x`.
 
 If your site doesn't allow installing new software at all (including Python), check with your local IT team first — this script cannot run without a working Python installation.
 
