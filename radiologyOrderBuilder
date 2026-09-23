@@ -12,7 +12,7 @@ from pywinauto.keyboard import send_keys
 # CONFIG
 # =====================================================================
 # File: radiologyOrderBuilder.py
-EXCEL_PATH   = Path(r"C:\Users\VHAMOUKEYMA\OneDrive - Department of Veterans Affairs\Desktop\autoTest.xlsx")
+EXCEL_PATH   = Path(r)
 SHEET_NAME   = 0
 DRY_RUN      = False        # True = print steps only, no keystrokes sent
 TYPE_PAUSE   = 0.09       # per-key pause for send_keyEXTs
@@ -24,8 +24,8 @@ SCREEN_TIMEOUT = 20.0       # seconds to wait for expected prompt
 # testing, so test orders are easy to identify and remove. Only switch
 # this to your site's real production prefix (e.g. "RAZN ") once you're
 # confident the script is behaving correctly.
-ORDER_PREFIX = "ZZXYZ " 
-ORDER_SUFFIX = " 1999"
+ORDER_PREFIX = "RA " 
+ORDER_SUFFIX = ""
 
 
 # Required spreadsheet columns:
@@ -65,7 +65,7 @@ VALID_IMAGING_TYPES = {
 # behavior (blank/Enter) unless your site has a specific mapping like
 # Fresno's below. Only enable this if EVERY order of a given imaging
 # type always goes to the exact same submit-to team, with no exceptions.
-USE_SUBMIT_TO_MAPPING = False
+USE_SUBMIT_TO_MAPPING = True
 
 SUBMIT_TO_MAP = {
     "GENERAL RADIOLOGY": "FRESNO GENERAL IMAGING",
@@ -83,10 +83,7 @@ SUBMIT_TO_MAP = {
 # pastes wrong/empty content into every order in the batch. Update this
 # list to match distinctive pieces of your actual template.
 CLINICAL_HISTORY_EXPECTED_FRAGMENTS = [
-    "{FLD:IMAGING ICD10LINK}",
-    "{FLD:621 IMAGING DX}",
-    "{FLD:621 RAD PROVIDER NUMBER}",
-    "{FLD:621 STAT RAD ORDER}",
+    "{FLD:IMAGING ICD10LINK}"
 ]
 
 # =====================================================================
@@ -325,14 +322,29 @@ def _paste_and_wait_for_stable(screen, stable_checks: int = 3, poll_interval: fl
 
     return False
 
-def _nume():
-    """Send NumLock followed by E to exit the VistA word processor editor."""
+def _nume(screen):
+    """
+    Exit the VistA word processor editor via Ctrl+E, then answer the
+    resulting 'Do you want to save changes?' confirmation with Y.
+    (This site's VistA config uses Ctrl+E instead of NumLock+E, and
+    Ctrl+E triggers a save confirmation prompt that NumLock+E did not.)
+    """
     if DRY_RUN:
         return
     try:
-        _send("{NUMLOCK}E")
+        _send("^e")
     except Exception as exc:
-        print(f"[ERROR] Failed to send NumLock+E: {exc}")
+        print(f"[ERROR] Failed to send Ctrl+E: {exc}")
+        return
+
+    matched, _ = wait_for_any(screen, ["Do you want to save changes?", "Save changes?"], timeout=8)
+    if not matched:
+        print("[WARN] Expected 'Do you want to save changes?' prompt not seen "
+              "after Ctrl+E — proceeding anyway, verify manually if something looks wrong.")
+        return
+
+    _type("Y")
+    _send("{ENTER}")
 
 # =====================================================================
 # ESC PAUSE / HANDOFF
@@ -546,7 +558,7 @@ def build_steps(order: dict):
                     "Check VistA screen state manually before resuming.")
             return
 
-        _nume()
+        _nume(screen)
 
     def step_enter_only(screen):
         _send("{ENTER}")
